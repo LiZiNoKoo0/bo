@@ -1,0 +1,709 @@
+package com.codelv.inventory
+
+import android.content.Context
+import android.util.Log
+import android.webkit.CookieManager
+import android.webkit.WebStorage
+import android.webkit.WebView
+import androidx.compose.runtime.mutableStateListOf
+import androidx.core.text.trimmedLength
+import androidx.lifecycle.ViewModel
+import androidx.room.*
+import com.codelv.inventory.suppliers.Arrow
+import com.codelv.inventory.suppliers.Digikey
+import com.codelv.inventory.suppliers.LCSC
+import com.codelv.inventory.suppliers.Mouser
+import com.codelv.inventory.suppliers.RS
+import com.codelv.inventory.suppliers.RSUK
+import com.journeyapps.barcodescanner.ScanOptions
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import java.io.File
+import java.io.OutputStream
+import java.io.InputStream
+import java.net.URLEncoder
+import java.util.*
+import kotlin.math.max
+
+val USER_AGENTS = listOf(
+    "Mozilla/5.0 (Linux; Android 10; Redmi Note 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; vivo 1906) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; Redmi Note 9S) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; SM-A507FN) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; 220333QAG) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; SM-A528B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; arm_64; Android 11; POCO M2 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/106.0.0.0 YaBrowser/22.11.7.42.00 SA/3 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; TECNO KC8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 8.1.0; SM-G610F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-A5070) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/19.0 Chrome/102.0.5005.125 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; BV4900Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; RMX1851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 7.1.1; SM-C7108) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; Redmi Note 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; Infinix X6812 Build/RP1A.200720.011; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/111.0.5563.116 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; M2102J20SG) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; RMX2151) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.40 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; SM-A217F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 9; Infinix X625C) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; SM-A136U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; Redmi Note 9 Pro Max) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; M2007J20CG) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; RMX3471) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; V2109) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; M2102J20SI) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; M2103K19C) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.88 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; M2102J20SG) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; M2010J19CI) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; Redmi Note 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; SM-A207F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; STK-L21) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; Redmi Note 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 9; Moto Z3 Play) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; SM-G781B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; SM-A307GN) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; M2101K6G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; SM-A305F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; Redmi Note 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 9; 5202) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; Infinix X657C) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; SM-A715F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; Infinix X689C) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; DCO-LX9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 9; SO-01K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; SM-N986N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; M2104K10I) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; M2003J15SC) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.94 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; SM-A525F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; SM-A305GT) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; RMX2061) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; CPH2413) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; RMX3363) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; Redmi Note 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; SM-A536U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; Infinix X6815B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; SM-A127F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 8.1.0; vivo 1814) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; Nokia 7.2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; SM-A042F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; M2101K6P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Android 10; Mobile; rv:102.0) Gecko/102.0 Firefox/102.0",
+    "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.110 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 16; SM-A205U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.110 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 16; SM-A102U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.110 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 16; SM-G960U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.110 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 16; SM-N960U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.110 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 16; LM-Q720) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.110 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 16; LM-X420) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.110 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 16; LM-Q710(FGN)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.110 Mobile Safari/537.36",
+)
+
+// If host contains any of these strings block it
+var BLOCKED_HOSTS = listOf(
+    "analytics-eagain.com",
+    "cookielaw.org",
+    "corvidae.ai",
+    "datadoghq",
+    "datadome",
+    "evgnet.com",
+    "facebook",
+    "go-mpulse.com",
+    "googleapis.com",
+    "googletagmanager",
+    "groupbycloud.com",
+    "iadvize.com",
+    "jsdelivr.net",
+    "launchdarkley.com",
+    "liveperson.net",
+    "newrelic",
+    "px-cloud.net",
+    "qualtics.com",
+    "salecycle.com",
+    "sift.com",
+    "speedcurve.com",
+    "sub2tech.com",
+)
+
+var USER_AGENT = USER_AGENTS.random()
+
+suspend fun fetch(url: String, retries: Int = 3): Document? {
+    var doc: Document? = null
+    Log.d("FETCH", "Fetching ${url}")
+    withContext(Dispatchers.IO) {
+        for (i in 0..max(1, retries))
+            try {
+                var req = Jsoup.connect(url).userAgent(USER_AGENT).followRedirects(true)
+                doc = req.get()
+                Log.d("FETCH", "OK!")
+                break
+            } catch (e: java.net.SocketTimeoutException) {
+                delay(1000)
+                USER_AGENT = USER_AGENTS.random()
+                Log.d("FETCH", "ERROR: ${e}, retry with new UA..")
+            } catch (e: org.jsoup.HttpStatusException) {
+                delay(1000)
+                USER_AGENT = USER_AGENTS.random()
+                Log.d("FETCH", "ERROR: ${e}, retry with new UA..")
+            } catch (e: java.lang.Exception) {
+                Log.d("FETCH", "ERROR: ${e}")
+                break
+            }
+    }
+    return doc
+}
+
+fun cleanUrl(url: String): String {
+    if (!url.startsWith("http")) {
+        return "https://${url.trimStart('/')}"
+    }
+    return url
+}
+
+class Converters {
+    @TypeConverter
+    fun fromTimestamp(value: Long?): Date? {
+        return value?.let { Date(it) }
+    }
+
+    @TypeConverter
+    fun dateToTimestamp(date: Date?): Long? {
+        return date?.time?.toLong()
+    }
+}
+
+enum class ImportResult {
+    Success,
+    Error,
+    MultipleResults,
+    NoData,
+    BotCheck,
+}
+
+// Basic interface
+open class DataSupplier(
+    val name: String,
+    var requiresJs: Boolean = false,
+    var requireStorage: Boolean = false,
+    var requireIndexDB: Boolean = false,
+) {
+
+    // Check if the provided supplier name matches this data supplier
+    open fun matchesName(supplier: String): Boolean {
+        if (supplier.isBlank()) return false
+        return name.lowercase() == supplier.lowercase()
+    }
+
+    // Import data for the part using the given page source.
+    // If the page source is empty fetch it (without using a webview or js)
+    // If ovewrite is True, re-import any data even if it is already populated
+    open suspend fun importPartData(part: Part, page: String?, overwrite: Boolean): ImportResult {
+        if (requiresJs && page.isNullOrBlank()) {
+            return ImportResult.Error
+        }
+        try {
+            val doc = if (page.isNullOrBlank()) fetch(searchPartUrl(part)) else Jsoup.parse(page)
+            if (doc == null) {
+                return ImportResult.Error
+            }
+            return importPartData(part, doc, overwrite)
+        } catch (e: java.lang.Exception) {
+            Log.e("Unable to load page", e.toString())
+            return ImportResult.Error
+        }
+    }
+
+    open suspend fun importPartData(part: Part, doc: Document, overwrite: Boolean): ImportResult {
+        return ImportResult.NoData
+    }
+
+    // Return the url used to lookup the product
+    open fun searchPartUrl(part: Part): String {
+        val k = URLEncoder.encode(if (part.sku.trimmedLength() > 2) part.sku else part.mpn, "utf-8")
+        if (k.isBlank()) return ""
+        return searchUrl(k)
+    }
+
+    // Return the url used to lookup the product
+    open fun searchUrl(q: String): String {
+        return ""
+    }
+
+    // Return whether the url matches the product page
+    // This is used to determine if it should capture the page and use it to import part data
+    open fun isProductPage(url: String): Boolean {
+        return false
+    }
+
+    // Return the request headers needed for this site
+    // Some sites require certain headers or they will block the request
+    open fun requestHeaders(): Map<String, String> {
+        return mapOf()
+    }
+
+    open fun initWebView(view: WebView) {
+        view.settings.javaScriptEnabled = requiresJs
+        view.settings.domStorageEnabled = requireStorage
+        view.settings.databaseEnabled = requireIndexDB
+        view.settings.userAgentString = USER_AGENT
+        view.settings.setGeolocationEnabled(false)
+        Log.d("DataSupplier", "webview settings initialized")
+    }
+
+    open fun deinitWebView(view: WebView) {
+        // Clear all storage
+        WebStorage.getInstance().deleteAllData()
+        CookieManager.getInstance().removeAllCookies(null)
+        CookieManager.getInstance().flush()
+        view.clearCache(true)
+        view.clearFormData()
+        view.clearHistory()
+        view.clearSslPreferences()
+        Log.d("DataSupplier", "webview cache flushed")
+    }
+
+}
+
+
+// Registry of supported data suppliers
+val DATA_SUPPLIERS = listOf<DataSupplier>(
+    Arrow(),
+    Digikey(),
+    Mouser(),
+    LCSC(),
+    RS(),
+    RSUK(),
+)
+
+
+@Entity(tableName = "parts")
+data class Part(
+    @PrimaryKey(autoGenerate = true) var id: Int,
+    var name: String = "",
+    var mpn: String = "",
+    var sku: String = "", // Supplier part number
+    var manufacturer: String = "",
+    var description: String = "",
+    var supplier: String = "",
+    var order_number: String = "",
+    var datasheetUrl: String = "",
+    var pictureUrl: String = "",
+    var location: String = "",
+    var unit_price: Double = 0.0,
+    var total_amount: Double = 0.0,
+    var num_ordered: Int = 0,
+    var num_in_stock: Int = 0,
+    val created: Date = Date(),
+    var updated: Date = Date(),
+) {
+    fun isValid(): Boolean {
+        return mpn.length > 0
+    }
+
+    // Lookup the data suppler from the part suppler name
+    fun dataSupplier(): DataSupplier? {
+        return DATA_SUPPLIERS.find { it.matchesName(supplier) }
+    }
+
+}
+
+@Entity(tableName = "scans")
+data class Scan(
+    @PrimaryKey(autoGenerate = true) var id: Int,
+    var value: String = "",
+    val created: Date = Date(),
+) {
+
+    @delegate:Ignore
+    val part: Part? by lazy {
+
+        var result: Part? = null
+        if ((value.startsWith("[)>\u001E06") || value.startsWith("0[)>\u001E06")) && value.length > 10) {
+            result = parseTrackingQrcode()
+        } else if (value.startsWith("{") && value.length > 10 && value.endsWith("}")) {
+            result = parseJsonQrcode()
+        }
+        result
+    }
+
+    fun isValid(): Boolean {
+        return part != null
+    }
+
+
+    // Digikey format
+    // [[)>06, P3191-E2JFCT-ND, 1PE2JF, K, 1K80853959, 10K96724994, 11K1, 4LCN, Q1000, 11ZPICK, 12Z13912711, 13Z828015, 20Z000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000]
+    // TI format
+    // [[)>06, P, 1PSN65LVDS33PW, 6P, 2PB, Q30, V0033317, 1T1409142ZFD, 4WTKY, D2245+5, 31T2917413TW2, 20LTID, 21LDEU, 22LTAI, 23LTWN, EG4, 3Z1/260C/UNLIM;//;121722, L1285, 7K, N00]
+    fun parseTrackingQrcode(): Part? {
+        var entries = value.split(29.toChar())
+        Log.d("Scan", "Entries ${entries}")
+        var part = Part(id = 0)
+        for ((_, p) in entries.withIndex()) {
+            if (p.startsWith("1P") && p.length > 2) {
+                part.mpn = p.substring(2) // MPN
+            } else if (p.startsWith("Q") && p.length > 1) {
+                try {
+                    // Remove the Q and any trailing unicode stuff
+                    val v = p.filter { it.isDigit() }
+                    val qty = Integer.parseUnsignedInt(v)
+                    part.num_in_stock = qty
+                    part.num_ordered = qty
+                } catch (e: java.lang.NumberFormatException) {
+                    // Pass
+                }
+            } else if (p.startsWith("1K") && p.length > 2) {
+                part.order_number = p.substring(2)
+            } else if (p.startsWith("P") && p.length > 1) {
+                part.sku = p.substring(1)
+            }
+        }
+        if (part.isValid()) {
+            return part
+        }
+        return null
+    }
+
+    fun parseJsonQrcode(): Part? {
+        var entries = value.substring(1, value.length - 1).split(",")
+        // Log.d("Scan", "Entries ${entries}")
+        var part = Part(id = 0)
+        for ((_, p) in entries.withIndex()) {
+            val entry = p.split(":")
+            if (entry.size == 2) {
+                when (entry[0]) {
+                    "pm" -> part.mpn = entry[1]
+                    "pc" -> part.sku = entry[1]
+                    "qty" -> {
+                        try {
+                            val qty = Integer.parseUnsignedInt(entry[1])
+                            part.num_in_stock = qty
+                            part.num_ordered = qty
+                        } catch (e: java.lang.NumberFormatException) {
+                            // Pass
+                        }
+                    }
+
+                    else -> {}
+                }
+            }
+        }
+
+        if (part.isValid()) {
+            part.supplier = "LCSC"
+            return part
+        }
+        return null
+    }
+}
+
+//@Dao
+//interface Manager<T> {
+//    @Insert
+//    suspend fun insertAll(vararg items: T)
+//
+//    @Insert
+//    suspend fun insert(item: T)
+//
+//    @Update
+//    suspend fun updateAll(vararg item: T)
+//
+//    @Update
+//    suspend fun update(vararg item: T)
+//
+//    @Delete
+//    suspend fun delete(item: T)
+//
+//}
+
+// Kotlins type inference seems to suck an cannot
+// just use the type at "compile" time so I must repeat and rename everything
+@Dao
+interface PartManager {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(vararg items: Part): List<Long>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(item: Part): Long
+
+    @Update
+    suspend fun updateAll(vararg item: Part)
+
+    @Update
+    suspend fun update(vararg item: Part)
+
+    @Delete
+    suspend fun delete(item: Part)
+
+    @Query("SELECT COUNT(id) FROM parts")
+    suspend fun totalCount(): Int
+
+    @Query("SELECT * FROM parts ORDER BY -created")
+    suspend fun all(): List<Part>
+
+    @Query("SELECT EXISTS(SELECT * FROM parts WHERE mpn = :mpn)")
+    suspend fun withMpnExists(mpn: String): Boolean
+
+    @Query("SELECT EXISTS(SELECT * FROM parts WHERE id = :id)")
+    suspend fun withIdExists(id: Int): Boolean
+
+    @Query("SELECT DISTINCT supplier FROM parts ORDER BY supplier")
+    suspend fun distinctSuppliers(): List<String>
+
+    @Query("SELECT DISTINCT manufacturer FROM parts ORDER BY manufacturer")
+    suspend fun distinctManufacturers(): List<String>
+}
+
+@Dao
+interface ScanManager {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(vararg items: Scan): List<Long>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(item: Scan): Long
+
+    @Update
+    suspend fun updateAll(vararg item: Scan)
+
+    @Update
+    suspend fun update(vararg item: Scan)
+
+    @Delete
+    suspend fun delete(item: Scan)
+
+    @Query("SELECT * FROM scans ORDER BY -created")
+    suspend fun all(): List<Scan>
+
+    @Query("SELECT COUNT(id) FROM scans")
+    suspend fun totalCount(): Int
+
+    @Query("SELECT EXISTS(SELECT * FROM scans WHERE id = :id)")
+    suspend fun withIdExists(id: Int): Boolean
+
+    @Query("SELECT EXISTS(SELECT * FROM scans WHERE value = :value)")
+    suspend fun withValueExists(value: String): Boolean
+}
+
+@Database(
+    version = 2,
+    entities = [Part::class, Scan::class],
+    exportSchema = true,
+    autoMigrations = [
+        AutoMigration(from = 1, to = 2)
+    ]
+)
+@TypeConverters(Converters::class)
+abstract class AppDatabase : RoomDatabase() {
+
+    abstract fun parts(): PartManager
+    abstract fun scans(): ScanManager
+
+    companion object {
+        @Volatile
+        var instance: AppDatabase? = null
+
+        fun instance(context: Context): AppDatabase {
+            return instance ?: synchronized(this) {
+                val db = Room.databaseBuilder(
+                    context,
+                    AppDatabase::class.java,
+                    "inventory.db"
+                )
+                    .build()
+                instance = db
+
+                db
+            }
+
+        }
+
+    }
+
+    fun fullCheckpoint() {
+        // When Android uses write ahead logging the database is empty
+        // but instead has shm and wal files. This forces it to write out to the actual .db file
+        val db = instance!!.openHelper.writableDatabase
+        if (db.isWriteAheadLoggingEnabled) {
+            val cursor = db.query("PRAGMA wal_checkpoint(full)")
+            cursor.close()
+        }
+    }
+
+    fun exportDb(out: OutputStream): Long {
+        if (instance == null) {
+            return -1
+        }
+        try {
+            // Create checkpoint before exporting
+            fullCheckpoint()
+            val db = File(instance!!.openHelper.readableDatabase.path!!)
+            val data = db.readBytes()
+            out.write(data)
+            return data.size.toLong()
+        } catch (e: Exception) {
+            Log.e("ExportDb", "Failed to export: ${e}")
+            return -2
+        }
+    }
+
+    suspend fun importDb(context: Context, stream: InputStream): Long {
+        if (instance == null) {
+            return -1
+        }
+        try {
+            var newDb = Room.databaseBuilder(
+                context,
+                AppDatabase::class.java,
+                "imported.db"
+            ).createFromInputStream({ stream }).build()
+
+            val newParts = instance!!.parts().insertAll(*newDb.parts().all().toTypedArray())
+            Log.d("ImportDb", "Imported ${newParts.size} parts")
+            val newScans = instance!!.scans().insertAll(*newDb.scans().all().toTypedArray())
+            Log.d("ImportDb", "Imported ${newScans.size} scans")
+
+            return (newParts.size + newScans.size).toLong()
+        } catch (e: Exception) {
+            Log.e(TAG, e.toString())
+            return -1
+        }
+
+    }
+
+
+}
+
+class AppViewModel(val database: AppDatabase) : ViewModel() {
+    var parts: MutableList<Part> = mutableStateListOf()
+    var scans: MutableList<Scan> = mutableStateListOf()
+    var scanOptions: ScanOptions = ScanOptions()
+    var supplierOptions: MutableList<String> = mutableStateListOf()
+    var manufacturerOptions: MutableList<String> = mutableStateListOf()
+    var settings: MutableStateFlow<Settings> = MutableStateFlow(Settings())
+
+    init {
+        scanOptions
+            .setOrientationLocked(false)
+            .setBeepEnabled(false)
+            .setDesiredBarcodeFormats(
+                ScanOptions.DATA_MATRIX,
+                ScanOptions.QR_CODE,
+                ScanOptions.PDF_417
+            )
+    }
+
+    suspend fun reload() {
+        parts.clear()
+        scans.clear()
+        load()
+    }
+
+    suspend fun loadOptions() {
+        supplierOptions.clear()
+        supplierOptions.addAll(database.parts().distinctSuppliers().filter { it.isNotBlank() })
+        Log.d("DB", "Distinct suppliers: ${supplierOptions}")
+        DATA_SUPPLIERS.forEach { supplier ->
+            if (supplierOptions.find { it.contains(supplier.name, ignoreCase = true) } == null) {
+                supplierOptions.add(supplier.name)
+            }
+        }
+        supplierOptions.sort()
+
+        manufacturerOptions.clear()
+        manufacturerOptions.addAll(
+            database.parts().distinctManufacturers().filter { it.isNotBlank() })
+        manufacturerOptions.sort()
+        Log.d("DB", "Distinct manufacturers: ${manufacturerOptions}")
+    }
+
+    suspend fun load() {
+        parts.addAll(database.parts().all())
+        scans.addAll(database.scans().all())
+        loadOptions()
+    }
+
+    suspend fun addScan(scan: Scan): Boolean {
+        if (!database.scans().withValueExists(scan.value)) {
+            val id = database.scans().insert(scan)
+            scan.id = id.toInt()
+            scans.add(0, scan)
+            Log.d("DB", "Added scan ${scan}")
+            return true
+        } else {
+            Log.w("DB", "Scan with barcode already exists: ${scan.value}")
+            return false
+        }
+    }
+
+    suspend fun removeScan(scan: Scan): Boolean {
+        if (scan in scans) {
+            scans.remove(scan)
+        }
+        if (database.scans().withIdExists(scan.id)) {
+            database.scans().delete(scan)
+            Log.w("DB", "Removed ${scan}")
+            return true
+        }
+        Log.w("DB", "Cannot remove ${scan}, it does not exist in the db")
+        return false
+    }
+
+    suspend fun addPart(part: Part): Boolean {
+        if (!database.parts().withMpnExists(part.mpn)) {
+            val id = database.parts().insert(part)
+            part.id = id.toInt()
+            parts.add(0, part)
+            Log.d("DB", "Added part ${part}")
+            return true
+        } else {
+            Log.w("DB", "Part with mpn ${part.mpn} already exists!")
+            return false
+        }
+    }
+
+    suspend fun removePart(part: Part): Boolean {
+        if (part in parts) {
+            parts.remove(part)
+        }
+        if (database.parts().withIdExists(part.id)) {
+            Log.d("DB", "Removed ${part}")
+            database.parts().delete(part)
+            return true
+        }
+        Log.w("DB", "Cannot remove ${part}, it does not exist in the db")
+        return false
+    }
+
+    suspend fun savePart(part: Part) {
+        part.updated = Date()
+        database.parts().update(part)
+        Log.d("DB", "Saved part ${part}")
+    }
+
+    fun exportDb(out: OutputStream): Long {
+        return database.exportDb(out)
+    }
+
+    suspend fun importDb(context: Context, stream: InputStream): Long {
+        return database.importDb(context, stream)
+    }
+
+    suspend fun loadSettings(context: Context) {
+        this.settings.value = context.dataStore.data.first()
+        Log.d("DB", "Loaded settings ${this.settings.value}")
+    }
+
+    suspend fun saveSettings(context: Context) {
+        Log.d("DB", "Update settings ${this.settings.value}")
+        context.dataStore.updateData { this.settings.value }
+        Log.d("DB", "Save settings ${context.dataStore.data.first()}")
+    }
+
+}
+
